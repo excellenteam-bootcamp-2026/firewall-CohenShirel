@@ -1,49 +1,119 @@
-/**
- * Application composition root.
- * Wires adapters to use cases, initializes cross-cutting infrastructure, and starts HTTP server.
- */
-const express = require('express');
-import { createFirewallRouter } from '../adapters/http.adapter';
-import { firewallRepository, idGenerator } from '../adapters/memory.db';
-import { logger } from '../adapters/Logger';
+import express from 'express';
+import { createFirewallRouter } from '../adapters/in/http.adapter';
+import { createDatabaseConnection } from '../adapters/out/db';
+import {
+  firewallRepository as memoryRepository,
+  idGenerator as memoryIdGenerator,
+} from '../adapters/out/memory.db';
+import { createAppLogger, createRequestLogger } from '../adapters/out/Logger';
+import { createPostgresIdGenerator } from '../adapters/out/postgresIdGenerator';
+import { createPostgresRepository } from '../adapters/out/postgresRepository';
+import { FIREWALL_RULES_PATH } from '../adapters/in/routes';
+import { FirewallService } from '../application/firewallService';
+import type { IFirewallRepository } from '../ports/IFirewallRepository';
+import type { IFirewallRulesUseCase } from '../ports/IFirewallRulesUseCase';
+import type { IIdGenerator } from '../ports/IIdGenerator';
 import { config } from './env';
 
 const PORT = config.PORT;
-// Import side effect: initializes singleton logger and console routing once.
-void logger;
+export interface AppDependencies {
+  repository?: IFirewallRepository;
+  idGenerator?: IIdGenerator;
+}
 
-/**
- * Creates an Express app instance without binding a port.
- * Keeping creation separate from listen() enables integration testing.
- */
-export function createApp() {
+const isMalformedJsonError = (
+  error: unknown
+): error is SyntaxError & { status?: number; body?: unknown } =>
+  error instanceof SyntaxError &&
+  (error as SyntaxError & { status?: number; body?: unknown }).status === 400 &&
+  'body' in (error as object);
+
+export function createApp(
+  logger = createAppLogger(config.ENV),
+  dependencies: AppDependencies = {}
+) {
+  const {
+    repository = memoryRepository,
+    idGenerator = memoryIdGenerator,
+  } = dependencies;
+
   const app = express();
+  const firewallRulesUseCase: IFirewallRulesUseCase = new FirewallService(
+    repository,
+    idGenerator
+  );
 
   app.use(express.json());
 
-  app.use((req: any, _res: any, next: any) => {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] Incoming Request: ${req.method} ${req.url}`);
-    next();
-  });
+  app.use(createRequestLogger(logger));
 
   app.use(
     createFirewallRouter({
-      repository: firewallRepository,
-      idGenerator,
+      firewallRulesUseCase,
+      firewallRulesPath: FIREWALL_RULES_PATH,
     })
   );
 
+  app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (isMalformedJsonError(error)) {
+      logger.warn('Malformed JSON request rejected.');
+
+      return res.status(400).json({
+        status: 'error',
+        code: 'INVALID_JSON_PAYLOAD',
+        message: 'Malformed JSON request body.',
+      });
+    }
+
+    return next(error);
+  });
+
   return app;
+}
+async function bootstrap(): Promise<void> {
+  const logger = createAppLogger(config.ENV);
+  const dbManager = createDatabaseConnection(config.selectedDatabaseUri);
+
+  await dbManager.connect({
+    logger,
+    intervalMs: config.DB_CONNECTION_INTERVAL,
+  });
+
+  const postgresRepository = createPostgresRepository(dbManager.db);
+  const postgresIdGenerator = createPostgresIdGenerator(dbManager.db);
+
+  const app = createApp(logger, {
+    repository: postgresRepository,
+    idGenerator: postgresIdGenerator,
+  });
+
+  const server = app.listen(PORT, () => {
+    logger.info(`Server successfully started and listening on port ${PORT}`);
+  });
+
+  const shutdown = (signal: string): void => {
+    logger.info(`Received ${signal}. Shutting down.`);
+
+    server.close(() => {
+      void dbManager.close().then(
+        () => process.exit(0),
+        (error: unknown) => {
+          logger.error('Failed to close the database pool cleanly.', error);
+          process.exit(1);
+        }
+      );
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 if (require.main === module) {
-  const app = createApp();
-  /**
-   * Startup occurs only when executed as the process entrypoint,
-   * preventing accidental port binding in tests/importers.
-   */
-  app.listen(PORT, () => {
-    console.log(`Server successfully started and listening on port ${PORT}`);
+  void bootstrap().catch((error: unknown) => {
+    process.stderr.write(
+      `Startup failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`
+    );
+    process.exit(1);
   });
 }

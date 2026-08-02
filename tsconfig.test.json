@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["node", "jest", "express"],
+    "rootDir": ".",
     "isolatedModules": true,
     "noEmit": true
   },
