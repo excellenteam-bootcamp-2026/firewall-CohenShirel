@@ -1,13 +1,10 @@
 /**
- * Domain types for firewall rules.
- * This file defines the canonical business vocabulary shared across application and adapters.
+ * Canonical business vocabulary for firewall rules. Adding a type or mode here is a
+ * domain decision: validators, persistence and DTOs all key off these unions.
  */
 export type FirewallRuleType = 'ip' | 'domain' | 'port';
 export type FirewallRuleMode = 'blacklist' | 'whitelist';
 
-/**
- * Immutable shape of a firewall rule as understood by the domain.
- */
 export interface FirewallRule {
   id: number;
   type: FirewallRuleType;

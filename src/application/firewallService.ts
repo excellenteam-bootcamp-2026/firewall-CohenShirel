@@ -1,111 +1,102 @@
-/**
- * Application use case for firewall rule creation.
- * This layer orchestrates domain validation and persistence ports without transport coupling.
- */
 import { validateAddRulesInput } from '../domain/firewall/FirewallValidators';
 import type {
   FirewallRule,
   FirewallRuleMode,
   FirewallRuleType,
 } from '../domain/firewall/FirewallRule';
+import type { IIdGenerator } from '../ports/IIdGenerator';
+import type { IFirewallRepository } from '../ports/IFirewallRepository';
+import type {
+  AddRulesInput,
+  AddRulesResult,
+  AddRulesSuccess,
+  AddRulesSuccessByType,
+  AddRulesValueByType,
+  IFirewallRulesUseCase,
+} from '../ports/IFirewallRulesUseCase';
 
-/**
- * Output port for persisting rules.
- */
-export interface FirewallRulesRepository {
-  addMany(rules: FirewallRule[]): void;
-}
+type CreatedRuleValue<TType extends FirewallRuleType> = AddRulesSuccessByType<TType>['values'][number];
 
-/**
- * Port that abstracts ID generation strategy.
- */
-export interface IdGenerator {
-  nextId(): number;
-}
+export class FirewallService implements IFirewallRulesUseCase {
+  constructor(
+    private readonly repository: IFirewallRepository,
+    private readonly idGenerator: IIdGenerator
+  ) {}
 
-/**
- * Use-case input shape intentionally typed as unknown to force explicit validation.
- */
-export interface AddRulesInput {
-  type: unknown;
-  mode: unknown;
-  values: unknown;
-}
+  /**
+   * Validates the full batch before persisting anything, so the operation is atomic:
+   * either every rule in the request is created, or none is.
+   */
+  async handleAddRules(input: AddRulesInput): Promise<AddRulesResult> {
+    const validation = validateAddRulesInput({
+      type: input.type,
+      mode: input.mode,
+      values: input.values,
+    });
 
-export interface AddRulesSuccess {
-  type: FirewallRuleType;
-  mode: FirewallRuleMode;
-  values: Array<{
-    id: number;
-    value: string | number;
-    active: boolean;
-  }>;
-  status: 'success';
-}
+    if (!validation.ok) {
+      return {
+        status: 'error',
+        code: validation.error.code,
+        message: validation.error.message,
+      };
+    }
 
-export interface AddRulesError {
-  status: 'error';
-  code: string;
-  message: string;
-}
+    const type = input.type as FirewallRuleType;
+    const mode = input.mode as FirewallRuleMode;
 
-export type AddRulesResult = AddRulesSuccess | AddRulesError;
-
-/**
- * Creates firewall rules only after batch validation succeeds.
- * This prevents partial writes and keeps state transitions atomic at use-case level.
- */
-export function handleAddRules(
-  input: AddRulesInput,
-  deps: {
-    idGenerator: IdGenerator;
-    repository: FirewallRulesRepository;
+    switch (type) {
+      case 'ip':
+        return this.createSuccess(type, mode, input.values as AddRulesValueByType['ip'][]);
+      case 'domain':
+        return this.createSuccess(type, mode, input.values as AddRulesValueByType['domain'][]);
+      case 'port':
+        return this.createSuccess(type, mode, input.values as AddRulesValueByType['port'][]);
+    }
   }
-): AddRulesResult {
-  const validation = validateAddRulesInput({
-    type: input.type,
-    mode: input.mode,
-    values: input.values,
-  });
 
-  if (!validation.ok) {
+  private async createSuccess<TType extends FirewallRuleType>(
+    type: TType,
+    mode: FirewallRuleMode,
+    values: AddRulesValueByType[TType][]
+  ): Promise<AddRulesSuccessByType<TType>> {
+    // One reservation for the whole batch: every rule needs its ID before the single write
+    // that stores them, and the response has to name each rule it created.
+    const ids = await this.idGenerator.nextIds(values.length);
+
+    if (ids.length !== values.length) {
+      throw new Error(
+        `ID generator returned ${ids.length} ID(s) for ${values.length} rule(s).`
+      );
+    }
+
+    const newRules: FirewallRule[] = [];
+    const createdValues: Array<CreatedRuleValue<TType>> = [];
+
+    values.forEach((value, index) => {
+      const newRule: FirewallRule = {
+        id: ids[index],
+        type,
+        mode,
+        value,
+        active: true,
+      };
+
+      newRules.push(newRule);
+      createdValues.push({
+        id: newRule.id,
+        value,
+        active: newRule.active,
+      });
+    });
+
+    await this.repository.saveBatch(newRules);
+
     return {
-      status: 'error',
-      code: validation.error.code,
-      message: validation.error.message,
-    };
-  }
-
-  const type = input.type as FirewallRuleType;
-  const mode = input.mode as FirewallRuleMode;
-  const values = input.values as Array<string | number>;
-
-  const newRules: FirewallRule[] = [];
-  const createdValues: AddRulesSuccess['values'] = [];
-
-  for (const value of values) {
-    const newRule: FirewallRule = {
-      id: deps.idGenerator.nextId(),
       type,
       mode,
-      value,
-      active: true,
+      values: createdValues,
+      status: 'success',
     };
-
-    newRules.push(newRule);
-    createdValues.push({
-      id: newRule.id,
-      value: newRule.value,
-      active: newRule.active,
-    });
   }
-
-  deps.repository.addMany(newRules);
-
-  return {
-    type,
-    mode,
-    values: createdValues,
-    status: 'success',
-  };
 }

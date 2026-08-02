@@ -1,11 +1,12 @@
 /**
- * Domain validation policies for firewall inputs.
- * The functions here remain framework-agnostic so rules can be reused by any adapter.
+ * Validation policy for firewall rule creation. Kept free of framework and I/O
+ * dependencies so the same rules apply no matter which adapter drives them.
  */
 import type { FirewallRuleMode, FirewallRuleType } from './FirewallRule';
 
 /**
- * Domain-level error contract used by application use cases and adapters.
+ * Part of the public contract: adapters map these codes onto transport errors,
+ * so renaming a code is a breaking API change.
  */
 export interface ValidationIssue {
   code: string;
@@ -23,24 +24,17 @@ const fail = (code: string, message: string): ValidationResult => ({
   error: { code, message },
 });
 
-/**
- * Restricts modes to explicit allow-list values to prevent accidental policy drift.
- */
 export function isValidRuleMode(mode: unknown): mode is FirewallRuleMode {
   return mode === 'blacklist' || mode === 'whitelist';
 }
 
-/**
- * Restricts rule types to the domain-supported categories.
- */
 export function isValidRuleType(type: unknown): type is FirewallRuleType {
   return type === 'ip' || type === 'domain' || type === 'port';
 }
 
-// Monolith parity: IP validation is IPv4-only.
 /**
- * Validates IPv4 in pure domain code without relying on Node networking helpers.
- * Keeping this logic local preserves portability and testability.
+ * IPv4 only, by product rule — IPv6 addresses are rejected, not normalised.
+ * Hand-rolled rather than delegating to a library so the domain keeps zero dependencies.
  */
 export function isValidIPv4(value: unknown): value is string {
   if (typeof value !== 'string') return false;
@@ -58,7 +52,8 @@ export function isValidIPv4(value: unknown): value is string {
 }
 
 /**
- * Accepts host-like domains only; rejects protocol/path/port to enforce normalized rule values.
+ * Host names only: a protocol, path or port makes the value ambiguous as a rule target,
+ * so those are rejected rather than stripped.
  */
 export function isValidDomain(value: unknown): value is string {
   if (typeof value !== 'string' || value.length === 0) return false;
@@ -67,13 +62,30 @@ export function isValidDomain(value: unknown): value is string {
     return false;
   }
 
-  const domainRegex = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-  return domainRegex.test(value);
+  const labels = value.split('.');
+
+  if (labels.length < 2 || labels.some((label) => label.length === 0)) {
+    return false;
+  }
+
+  const topLevelLabel = labels[labels.length - 1];
+  if (!/^[a-zA-Z]{2,}$/.test(topLevelLabel)) {
+    return false;
+  }
+
+  return labels.every((label, index) => {
+    if (label.startsWith('-') || label.endsWith('-')) {
+      return false;
+    }
+
+    const labelPattern = index === labels.length - 1
+      ? /^[a-zA-Z]{2,}$/
+      : /^[a-zA-Z0-9-]+$/;
+
+    return labelPattern.test(label);
+  });
 }
 
-/**
- * Validates TCP/UDP port range with strict integer semantics.
- */
 export function isValidPort(value: unknown): value is number {
   return (
     typeof value === 'number' &&
@@ -83,21 +95,38 @@ export function isValidPort(value: unknown): value is number {
   );
 }
 
-/**
- * Dispatches value validation by declared rule type.
- */
+const validatorByType: Record<FirewallRuleType, (value: unknown) => boolean> = {
+  ip: isValidIPv4,
+  domain: isValidDomain,
+  port: isValidPort,
+};
+
+const invalidValueIssueByType: Record<FirewallRuleType, ValidationIssue> = {
+  ip: {
+    code: 'INVALID_IP',
+    message: 'Only valid IPv4 addresses are accepted.',
+  },
+  domain: {
+    code: 'INVALID_DOMAIN',
+    message: 'Domains must not include protocol, path, or port.',
+  },
+  port: {
+    code: 'INVALID_PORT',
+    message: 'Ports must be integers between 1 and 65535.',
+  },
+};
+
 export function isValidValueForType(
   type: FirewallRuleType,
   value: unknown
 ): boolean {
-  if (type === 'ip') return isValidIPv4(value);
-  if (type === 'domain') return isValidDomain(value);
-  return isValidPort(value);
+  return validatorByType[type](value);
 }
 
 /**
- * Performs all-or-nothing validation for add-rules requests.
- * Returning domain error codes keeps transport-specific mapping (HTTP status, etc.) outside the domain.
+ * Validates the payload as one unit and stops at the first problem, so a caller fixing
+ * a request is never chasing a moving target. Returns domain error codes rather than
+ * HTTP status codes: transport mapping belongs to the adapters.
  */
 export function validateAddRulesInput(input: {
   type: unknown;
@@ -126,18 +155,8 @@ export function validateAddRulesInput(input: {
 
   for (const v of values) {
     if (!isValidValueForType(type, v)) {
-      if (type === 'ip') {
-        return fail('INVALID_IP', 'Only valid IPv4 addresses are accepted.');
-      }
-
-      if (type === 'domain') {
-        return fail(
-          'INVALID_DOMAIN',
-          'Domains must not include protocol, path, or port.'
-        );
-      }
-
-      return fail('INVALID_PORT', 'Ports must be integers between 1 and 65535.');
+      const issue = invalidValueIssueByType[type];
+      return fail(issue.code, issue.message);
     }
   }
 
