@@ -5,6 +5,7 @@
 import type {
   FirewallRuleMode,
   FirewallRuleType,
+  FirewallRule,
 } from '../domain/firewall/FirewallRule';
 
 /**
@@ -46,6 +47,20 @@ export interface AddRulesError {
 
 export type AddRulesResult = AddRulesSuccess | AddRulesError;
 
+export interface GetRulesSuccess {
+  status: 'success';
+  rules: FirewallRule[];
+}
+
+export interface GetRulesError {
+  status: 'error';
+  code: string;
+  message: string;
+}
+
+export type GetRulesResult = GetRulesSuccess | GetRulesError;
+
 export interface IFirewallRulesUseCase {
   handleAddRules(input: AddRulesInput): Promise<AddRulesResult>;
+  handleGetRules(): Promise<GetRulesResult>;
 }

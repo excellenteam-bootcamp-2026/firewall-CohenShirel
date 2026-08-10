@@ -4,7 +4,12 @@ import { createPostgresRepository } from '../../src/adapters/out/postgresReposit
 import { runFirewallRepositoryContractSuite } from '../contracts/firewallRepository.contract';
 
 const shouldRunPostgresContracts = process.env.RUN_POSTGRES_CONTRACT_TESTS === 'true';
-const dbManager = createDatabaseConnection(process.env.DATABASE_URL ?? 'postgres://localhost:5432/firewall_test');
+const testDatabaseName = process.env.ENV === 'prod' ? 'firewall_db_prod' : 'firewall_db_dev';
+const testDatabaseUri = `postgres://${encodeURIComponent(process.env.DB_USER ?? 'postgres')}:${encodeURIComponent(
+  process.env.DB_PASSWORD ?? 'postgres'
+)}@${process.env.DB_HOST ?? 'localhost'}:${process.env.DB_PORT ?? '5432'}/${testDatabaseName}`;
+
+const dbManager = createDatabaseConnection(testDatabaseUri);
 const postgresRepository = createPostgresRepository(dbManager.db);
 
 const ensureTableExists = async (): Promise<void> => {

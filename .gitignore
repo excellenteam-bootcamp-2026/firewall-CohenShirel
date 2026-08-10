@@ -11,3 +11,7 @@ Desktop.ini
 
 /dist
 /mydocu.md
+
+jest-results.json
+.env.prod
+.env.dev

@@ -12,6 +12,7 @@ import type {
   AddRulesSuccess,
   AddRulesSuccessByType,
   AddRulesValueByType,
+  GetRulesResult,
   IFirewallRulesUseCase,
 } from '../ports/IFirewallRulesUseCase';
 
@@ -52,6 +53,23 @@ export class FirewallService implements IFirewallRulesUseCase {
         return this.createSuccess(type, mode, input.values as AddRulesValueByType['domain'][]);
       case 'port':
         return this.createSuccess(type, mode, input.values as AddRulesValueByType['port'][]);
+    }
+  }
+
+  async handleGetRules(): Promise<GetRulesResult> {
+    try {
+      const rules = await this.repository.readAll();
+
+      return {
+        status: 'success',
+        rules,
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        code: 'GET_RULES_FAILED',
+        message: error instanceof Error ? error.message : 'Failed to load firewall rules.',
+      };
     }
   }
 

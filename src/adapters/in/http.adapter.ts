@@ -6,6 +6,7 @@ import {
 } from './dto/firewall.dto';
 import type {
   AddRulesResult,
+  GetRulesResult,
   IFirewallRulesUseCase,
 } from '../../ports/IFirewallRulesUseCase';
 
@@ -26,6 +27,16 @@ export function createFirewallRouter(deps: {
     }
 
     return res.status(201).json(result);
+  });
+
+  router.get(deps.firewallRulesPath, async (_req, res: Response<GetRulesResult>) => {
+    const result = await deps.firewallRulesUseCase.handleGetRules();
+
+    if (result.status === 'error') {
+      return res.status(500).json(result);
+    }
+
+    return res.status(200).json(result);
   });
 
   return router;

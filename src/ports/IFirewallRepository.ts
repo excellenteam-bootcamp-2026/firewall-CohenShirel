@@ -6,4 +6,5 @@ import type { FirewallRule } from '../domain/firewall/FirewallRule';
 
 export interface IFirewallRepository {
   saveBatch(rules: FirewallRule[]): Promise<void>;
+  readAll(): Promise<FirewallRule[]>;
 }

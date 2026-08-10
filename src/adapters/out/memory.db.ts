@@ -24,6 +24,10 @@ export const firewallRepository: IFirewallRepository & {
     rules.push(...cloneRules(newRules));
   },
 
+  async readAll(): Promise<FirewallRule[]> {
+    return cloneRules(rules);
+  },
+
   getAll(): FirewallRule[] {
     return cloneRules(rules);
   },
