@@ -10,25 +10,46 @@ describe('env configuration', () => {
     process.env = originalEnv;
   });
 
-  it('prefers DATABASE_URI_DEV when ENV is dev', () => {
+  it('builds the dev database URI from discrete DB variables', () => {
     process.env.ENV = 'dev';
     process.env.PORT = '3001';
-    process.env.DATABASE_URL = 'postgres://localhost:5432/fallback_db';
-    process.env.DATABASE_URI_DEV = 'postgres://localhost:5432/dev_db';
+    process.env.DB_USER = 'firewall';
+    process.env.DB_PASSWORD = 'secret';
+    process.env.DB_HOST = 'localhost';
+    process.env.DB_PORT = '5432';
 
     const { config } = require('../../src/main/env');
 
-    expect(config.selectedDatabaseUri).toBe('postgres://localhost:5432/dev_db');
+    expect(config.selectedDatabaseName).toBe('firewall_db_dev');
+    expect(config.selectedDatabaseUri).toBe('postgres://firewall:secret@localhost:5432/firewall_db_dev');
+    expect(config.loggerEnvironment).toBe('dev');
   });
 
-  it('throws when DATABASE_URI_DEV does not include a port', () => {
+  it('builds the prod database URI and maps logger environment to production', () => {
+    process.env.ENV = 'prod';
+    process.env.PORT = '3001';
+    process.env.DB_USER = 'firewall';
+    process.env.DB_PASSWORD = 'secret';
+    process.env.DB_HOST = 'db.internal';
+    process.env.DB_PORT = '5433';
+
+    const { config } = require('../../src/main/env');
+
+    expect(config.selectedDatabaseName).toBe('firewall_db_prod');
+    expect(config.selectedDatabaseUri).toBe('postgres://firewall:secret@db.internal:5433/firewall_db_prod');
+    expect(config.loggerEnvironment).toBe('production');
+  });
+
+  it('throws when DB_PORT is out of range', () => {
     process.env.ENV = 'dev';
     process.env.PORT = '3001';
-    process.env.DATABASE_URL = 'postgres://localhost:5432/fallback_db';
-    process.env.DATABASE_URI_DEV = 'postgres://localhost/dev_db';
+    process.env.DB_USER = 'firewall';
+    process.env.DB_PASSWORD = 'secret';
+    process.env.DB_HOST = 'localhost';
+    process.env.DB_PORT = '70000';
 
     expect(() => require('../../src/main/env')).toThrow(
-      'DATABASE_URI_DEV must include an explicit port.'
+      'DB_PORT must be between 1 and 65535.'
     );
   });
 });

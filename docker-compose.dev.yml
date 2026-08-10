@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  # 1. Database
+  db:
+    image: postgres:14-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-123456}
+      POSTGRES_DB: firewall_db_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2. Backend Server
+  backend:
+    build: 
+      context: .
+    env_file:
+      - .env.dev
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

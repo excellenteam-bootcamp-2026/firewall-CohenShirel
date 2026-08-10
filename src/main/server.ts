@@ -29,7 +29,7 @@ const isMalformedJsonError = (
   'body' in (error as object);
 
 export function createApp(
-  logger = createAppLogger(config.ENV),
+  logger = createAppLogger(config.loggerEnvironment),
   dependencies: AppDependencies = {}
 ) {
   const {
@@ -71,7 +71,7 @@ export function createApp(
   return app;
 }
 async function bootstrap(): Promise<void> {
-  const logger = createAppLogger(config.ENV);
+  const logger = createAppLogger(config.loggerEnvironment);
   const dbManager = createDatabaseConnection(config.selectedDatabaseUri);
 
   await dbManager.connect({

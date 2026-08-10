@@ -38,6 +38,31 @@ const wait = (milliseconds: number): Promise<void> =>
     setTimeout(resolve, milliseconds);
   });
 
+/**
+ * Exponential window for retry attempt `n`:
+ *   window(n) = min(baseIntervalMs * 2^(n-1), maxBackoffMs)
+ */
+const calculateExponentialWindowMs = (
+  baseIntervalMs: number,
+  attempt: number,
+  maxBackoffMs: number
+): number => {
+  return Math.min(
+    baseIntervalMs * 2 ** (attempt - 1),
+    maxBackoffMs
+  );
+};
+
+/**
+ * Full Jitter:
+ *   delay(n) = random(0, window(n))
+ *
+ * Choosing a random delay inside the exponential window de-synchronizes reconnect attempts
+ * across processes and mitigates thundering-herd collisions when PostgreSQL recovers.
+ */
+const calculateFullJitterDelayMs = (exponentialWindowMs: number): number =>
+  Math.floor(Math.random() * (exponentialWindowMs + 1));
+
 const describeError = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -64,9 +89,9 @@ export class DatabaseConnection {
   }
 
   /**
-   * Stop and wait: at most one outstanding attempt, a fixed pause between attempts, and no
-   * progress past this call until PostgreSQL accepts a connection. The database usually
-   * finishes booting after this process does, so a failed attempt is expected, not fatal.
+   * Stop and wait: at most one outstanding attempt, and no progress past this call until
+   * PostgreSQL accepts a connection. Backoff uses exponential growth with full jitter,
+   * which avoids synchronized reconnect spikes across concurrent process restarts.
    *
    * Idempotent — repeated calls await the same handshake instead of probing once per caller.
    */
@@ -117,13 +142,20 @@ export class DatabaseConnection {
           );
         }
 
-        const delay = Math.min(intervalMs * 2 ** (attempt - 1), maxBackoffMs);
+        const exponentialWindowMs = calculateExponentialWindowMs(
+          intervalMs,
+          attempt,
+          maxBackoffMs
+        );
+        const jitterDelayMs = calculateFullJitterDelayMs(exponentialWindowMs);
+        const errorMessage = describeError(error);
 
         logger.warn(
-          `[db] Connection attempt ${attempt} failed (${describeError(error)}). Retrying in ${delay}ms.`
+          `[db] Connection attempt ${attempt} failed (${errorMessage}). Retrying in ${jitterDelayMs}ms ` +
+            `(full_jitter_window=${exponentialWindowMs}ms).`
         );
 
-        await wait(delay);
+        await wait(jitterDelayMs);
       }
     }
   }

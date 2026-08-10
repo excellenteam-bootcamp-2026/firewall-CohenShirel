@@ -13,30 +13,46 @@ import { z } from 'zod';
  */
 dotenv.config({ quiet: true });
 
-const databaseUrlWithPort = (name: string) =>
-  z
-    .string()
-    .url(`${name} must be a valid URL.`)
-    .refine((value) => {
-      const parsed = new URL(value);
-      return parsed.port.length > 0;
-    }, `${name} must include an explicit port.`);
-
 /** Fallback wait between database connection attempts when the variable is absent. */
 const DEFAULT_DB_CONNECTION_INTERVAL_MS = 2_000;
 
+const ENV_TO_DATABASE_SUFFIX = {
+  dev: 'dev',
+  prod: 'prod',
+} as const;
+
+type RuntimeEnv = keyof typeof ENV_TO_DATABASE_SUFFIX;
+
+const toDatabaseName = (environment: RuntimeEnv): string =>
+  `firewall_db_${ENV_TO_DATABASE_SUFFIX[environment]}`;
+
+const encodeSegment = (value: string, segmentName: string): string => {
+  const encoded = encodeURIComponent(value);
+
+  if (encoded.length === 0) {
+    throw new Error(`${segmentName} must not be empty.`);
+  }
+
+  return encoded;
+};
+
 const envSchema = z.object({
-  ENV: z.enum(['dev', 'production']),
+  ENV: z.enum(['dev', 'prod']),
   PORT: z
     .coerce
     .number()
     .int('PORT must be an integer.')
     .min(1, 'PORT must be between 1 and 65535.')
     .max(65535, 'PORT must be between 1 and 65535.'),
-  DATABASE_URI: databaseUrlWithPort('DATABASE_URI').optional(),
-  DATABASE_URL: z.string().url(),
-  DATABASE_URI_DEV: databaseUrlWithPort('DATABASE_URI_DEV').optional(),
-  DATABASE_URI_PRODUCTION: databaseUrlWithPort('DATABASE_URI_PRODUCTION').optional(),
+  DB_USER: z.string().min(1, 'DB_USER must not be empty.'),
+  DB_PASSWORD: z.string().min(1, 'DB_PASSWORD must not be empty.'),
+  DB_HOST: z.string().min(1, 'DB_HOST must not be empty.'),
+  DB_PORT: z
+    .coerce
+    .number()
+    .int('DB_PORT must be an integer.')
+    .min(1, 'DB_PORT must be between 1 and 65535.')
+    .max(65535, 'DB_PORT must be between 1 and 65535.'),
   DB_CONNECTION_INTERVAL: z
     .coerce
     .number()
@@ -59,33 +75,36 @@ if (!parsedEnv.success) {
 const {
   ENV,
   PORT,
-  DATABASE_URI,
-  DATABASE_URL,
-  DATABASE_URI_DEV,
-  DATABASE_URI_PRODUCTION,
+  DB_USER,
+  DB_PASSWORD,
+  DB_HOST,
+  DB_PORT,
   DB_CONNECTION_INTERVAL,
 } = parsedEnv.data;
 
-// Precedence is explicit: an env-specific URI always wins over the shared fallback.
-const databaseUriByEnv = {
-  dev: DATABASE_URI_DEV ?? DATABASE_URL ?? DATABASE_URI,
-  production: DATABASE_URI_PRODUCTION ?? DATABASE_URL ?? DATABASE_URI,
-} as const;
+const selectedDatabaseName = toDatabaseName(ENV);
+const selectedDatabaseUri = `postgres://${encodeSegment(DB_USER, 'DB_USER')}:${encodeSegment(
+  DB_PASSWORD,
+  'DB_PASSWORD'
+)}@${DB_HOST}:${DB_PORT}/${selectedDatabaseName}`;
 
 const constants = {
   appName: 'firewall-cohenshirel',
 } as const;
 
+const loggerEnvironment = ENV === 'dev' ? 'dev' : 'production';
+
 export const config = {
   ENV,
   PORT,
-  DATABASE_URI,
-  DATABASE_URL,
-  DATABASE_URI_DEV,
-  DATABASE_URI_PRODUCTION,
+  DB_USER,
+  DB_PASSWORD,
+  DB_HOST,
+  DB_PORT,
   DB_CONNECTION_INTERVAL,
-  databaseUriByEnv,
-  selectedDatabaseUri: databaseUriByEnv[ENV],
+  selectedDatabaseName,
+  selectedDatabaseUri,
+  loggerEnvironment,
   constants,
 } as const;
 
